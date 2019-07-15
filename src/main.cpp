@@ -9,6 +9,11 @@
 #include "json.hpp"
 #include "spline.h"
 
+#define MAX_SPEED 49.5
+#define MAX_ACC 0.224;
+#define MIN_SPEED 1.5
+#define SENSOR_DIS 25
+
 // for convenience
 using nlohmann::json;
 using std::string;
@@ -95,39 +100,48 @@ int main() {
 
           //previous size
           int prev_size = previous_path_x.size();
+            if(prev_size > 0) {
+                car_s = end_path_s;
+            }
 
-
-          //here comes sensor fusion
-          if(prev_size > 0) {
-            car_s = end_path_s;
-          }
-
-          bool too_close = false;
-          //find ref_v to use
+          /* Here comes Prediction
+           * State equals to false represents no car ahead*/
+          bool ahead_state = false;
+          bool left_state = false;
+          bool right_state = false;
           for(int i=0; i<sensor_fusion.size(); i++){
-            //car is in my lane
-            float d = sensor_fusion[i][6];
-            if(d<(lane*4 +4) && d>(lane*4)){
+              double d = sensor_fusion[i][6];
+              int car_lane = d/4;
+
+              //find car speed
               double vx = sensor_fusion[i][3];
               double vy = sensor_fusion[i][4];
               double check_speed = sqrt(vx*vx + vy*vy);
               double check_car_s = sensor_fusion[i][5];
               check_car_s += ((double)prev_size*0.02*check_speed);
-              //take action is car is close
-              if((check_car_s>car_s)&&((check_car_s - car_s) < 30)){
-                too_close = true;
-                if(lane > 0)
-                  lane = 0;
+              //get state
+              if(car_lane == lane){
+                  ahead_state |= check_car_s > car_s && check_car_s - car_s < SENSOR_DIS;
+              }else if(car_lane < lane){
+                  left_state |= car_s - SENSOR_DIS < check_car_s && car_s + SENSOR_DIS > check_car_s;
+              }else if(car_lane > lane ){
+                  right_state |= car_s - SENSOR_DIS < check_car_s && car_s + SENSOR_DIS > check_car_s;
               }
-            }
           }
 
-          if(too_close){
-            ref_val -= .224;
-          }else if(ref_val < 49.5){
-            ref_val += .224;
+          /* Here comes Behavior planning*/
+          if(ahead_state){
+              //if car ahead
+              if(!left_state && lane>0) lane--;
+              else if(!right_state && lane<2) lane++;
+              else if(ref_val > MIN_SPEED) ref_val -= MAX_ACC;
+          }else{
+              if(ref_val < MAX_SPEED) ref_val += MAX_ACC;
           }
-          //here ends sensor fusion
+
+
+
+
 
           //create a list of widely spaced (x,y) points, evenly spaces at 30m
           //later we will interpolate theses waypoints with spline
@@ -220,6 +234,7 @@ int main() {
 
           //fill out the rest of path planning
           for(int i=1; i <= 50-previous_path_x.size(); i++){
+
             double N = target_dist/((.02*ref_val)/2.24);
             double x_point = x_add_on + target_x/N;
             double y_point = s(x_point);
@@ -229,7 +244,7 @@ int main() {
             double x_ref = x_point;
             double y_ref = y_point;
 
-            //rotate back to normal after rotate it 
+            //rotate back to normal after rotate it
             x_point = cos(ref_yaw)*x_ref - sin(ref_yaw)*y_ref;
             y_point = sin(ref_yaw)*x_ref + cos(ref_yaw)*y_ref;
 
